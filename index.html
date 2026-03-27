@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>알파남 ... 방구차 레이싱</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  background:#0a0a0a;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;
+  font-family:'Press Start 2P',monospace;
+  overflow:hidden;
+  user-select:none;
+}
+#hud{
+  display:flex;justify-content:space-between;align-items:center;
+  width:480px;padding:8px 12px 6px;
+  background:#111;
+  border:2px solid #333;border-bottom:none;
+  font-size:8px;color:#ffdd00;letter-spacing:1px;
+}
+#hud .lives{color:#ff4455;}
+canvas{display:block;border:2px solid #333;cursor:none;}
+#footer{
+  width:480px;padding:5px 12px 4px;
+  background:#111;border:2px solid #333;border-top:none;
+  font-size:7px;color:#444;text-align:center;letter-spacing:1px;
+}
+
+/* Touch buttons */
+#touch-controls{
+  display:none;
+  flex-direction:row;gap:12px;
+  margin-top:10px;
+}
+#touch-controls button{
+  width:64px;height:48px;
+  background:#1a1a1a;border:2px solid #444;
+  color:#aaa;font-family:'Press Start 2P',monospace;font-size:16px;
+  border-radius:8px;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+#touch-controls button:active{background:#333;}
+@media(max-width:520px){
+  #hud,canvas,#footer,#touch-controls{width:100vw;}
+  #touch-controls{display:flex;}
+}
+</style>
+</head>
+<body>
+<div id="hud">
+  <span>SCORE:<span id="scoreEl"> 0</span></span>
+  <span>알파남 가즈아 ~~~ 💨 방구차 레이싱</span>
+  <span class="lives">LIFE:<span id="livesEl"> ♥♥♥</span></span>
+</div>
+<canvas id="c" width="480" height="520"></canvas>
+<div id="footer">← → 이동 &nbsp;|&nbsp; SPACE 방구 발사 &nbsp;|&nbsp; ENTER 시작</div>
+<div id="touch-controls">
+  <button id="btnL">◀</button>
+  <button id="btnFart">💨</button>
+  <button id="btnR">▶</button>
+</div>
+
+<script>
+const C=document.getElementById('c');
+const ctx=C.getContext('2d');
+const W=480,H=520;
+
+// ── Pixel font helper ────────────────────────────────────────────────
+function px(str,x,y,size,color,align='left'){
+  ctx.save();
+  ctx.font=`${size}px 'Press Start 2P'`;
+  ctx.fillStyle=color;
+  ctx.textAlign=align;
+  ctx.textBaseline='top';
+  ctx.fillText(str,x,y);
+  ctx.restore();
+}
+
+// ── Road scrolling ───────────────────────────────────────────────────
+let roadY=0;
+const ROAD_L=110, ROAD_R=370;
+const LANE_W=(ROAD_R-ROAD_L)/3;
+
+// ── Game state ────────────────────────────────────────────────────────
+let state='title'; // title|play|dead|gameover
+let score=0,hiScore=0,lives=3,level=1,frame=0;
+let deathTimer=0,titleBlink=0;
+
+// ── Player ────────────────────────────────────────────────────────────
+const PLAYER_W=40,PLAYER_H=58;
+let player={
+  x:W/2-PLAYER_W/2, y:H-90,
+  vx:0, speed:4,
+  fartCd:0, invincible:0,
+  lane:1
+};
+
+// ── Fart projectiles ──────────────────────────────────────────────────
+let farts=[];
+
+// ── Enemy cars ────────────────────────────────────────────────────────
+let enemies=[];
+let enemyTimer=0, enemyInterval=90;
+
+// ── Road obstacles ────────────────────────────────────────────────────
+let obstacles=[];
+let obsTimer=0;
+
+// ── Coins ─────────────────────────────────────────────────────────────
+let coins=[];
+let coinTimer=0;
+
+// ── Particles ────────────────────────────────────────────────────────
+let particles=[];
+
+// ── Scroll speed ─────────────────────────────────────────────────────
+function scrollSpeed(){return 3+level*0.8;}
+
+// ── Drawing functions ─────────────────────────────────────────────────
+
+function drawRoad(){
+  // Sky/ground
+  ctx.fillStyle='#1a1a2e';
+  ctx.fillRect(0,0,W,H);
+
+  // Grass left
+  const grassColor= frame%40<20?'#1a4a1a':'#1e541e';
+  ctx.fillStyle=grassColor;
+  ctx.fillRect(0,0,ROAD_L,H);
+  ctx.fillStyle=frame%40<20?'#1e541e':'#1a4a1a';
+  ctx.fillRect(ROAD_R,0,W-ROAD_R,H);
+
+  // Road surface
+  ctx.fillStyle='#2a2a2a';
+  ctx.fillRect(ROAD_L,0,ROAD_R-ROAD_L,H);
+
+  // Road side stripes
+  ctx.fillStyle='#ffcc00';
+  ctx.fillRect(ROAD_L,0,4,H);
+  ctx.fillRect(ROAD_R-4,0,4,H);
+
+  // Dashed center lines
+  const dashH=40, gap=30, total=dashH+gap;
+  const offset=(roadY%total);
+  ctx.fillStyle='#ffffff44';
+  for(let y=-total+offset;y<H+total;y+=total){
+    ctx.fillRect(ROAD_L+LANE_W-2,y,4,dashH);
+    ctx.fillRect(ROAD_L+LANE_W*2-2,y,4,dashH);
+  }
+
+  // Road edge rumble strips
+  for(let y=-40+roadY%80;y<H;y+=80){
+    ctx.fillStyle='#cc2200';
+    ctx.fillRect(ROAD_L,y,10,40);
+    ctx.fillRect(ROAD_R-10,y,10,40);
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(ROAD_L,y+40,10,40);
+    ctx.fillRect(ROAD_R-10,y+40,10,40);
+  }
+}
+
+function drawPlayerCar(x,y,blink){
+  if(blink&&Math.floor(frame/4)%2===0)return;
+  ctx.save();
+  ctx.translate(x+PLAYER_W/2,y+PLAYER_H/2);
+
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.3)';
+  ctx.beginPath();ctx.ellipse(2,PLAYER_H/2+4,PLAYER_W/2,6,0,0,Math.PI*2);ctx.fill();
+
+  // Body
+  ctx.fillStyle='#e63946';
+  ctx.beginPath();
+  ctx.roundRect(-PLAYER_W/2+2,-PLAYER_H/2+8,PLAYER_W-4,PLAYER_H-16,6);
+  ctx.fill();
+
+  // Roof
+  ctx.fillStyle='#c1121f';
+  ctx.beginPath();
+  ctx.roundRect(-PLAYER_W/2+8,-PLAYER_H/2,PLAYER_W-16,PLAYER_H*0.45,5);
+  ctx.fill();
+
+  // Windshield
+  ctx.fillStyle='#90e0ef';
+  ctx.beginPath();
+  ctx.roundRect(-PLAYER_W/2+10,-PLAYER_H/2+3,PLAYER_W-20,14,3);
+  ctx.fill();
+  ctx.strokeStyle='#023e8a';ctx.lineWidth=1;ctx.stroke();
+
+  // Rear window
+  ctx.fillStyle='#90e0ef';
+  ctx.beginPath();
+  ctx.roundRect(-PLAYER_W/2+10,4,PLAYER_W-20,10,2);
+  ctx.fill();
+
+  // Wheels
+  const wheelColor='#222';
+  const hubColor='#888';
+  [[-PLAYER_W/2+1,-PLAYER_H/2+14],[PLAYER_W/2-9,-PLAYER_H/2+14],
+   [-PLAYER_W/2+1,PLAYER_H/2-24],[PLAYER_W/2-9,PLAYER_H/2-24]].forEach(([wx,wy])=>{
+    ctx.fillStyle=wheelColor;
+    ctx.beginPath();ctx.roundRect(wx,wy,8,14,3);ctx.fill();
+    ctx.fillStyle=hubColor;
+    ctx.beginPath();ctx.arc(wx+4,wy+7,3,0,Math.PI*2);ctx.fill();
+  });
+
+  // Headlights
+  ctx.fillStyle='#ffe566';
+  ctx.beginPath();ctx.roundRect(-PLAYER_W/2+3,-PLAYER_H/2+8,8,5,2);ctx.fill();
+  ctx.beginPath();ctx.roundRect(PLAYER_W/2-11,-PLAYER_H/2+8,8,5,2);ctx.fill();
+
+  // Exhaust pipe
+  ctx.fillStyle='#555';
+  ctx.fillRect(-4,PLAYER_H/2-8,8,12);
+
+  // Fart puff from exhaust (when fart fired)
+  if(player.fartCd>16){
+    const alpha=(player.fartCd-16)/8;
+    ctx.globalAlpha=alpha;
+    ctx.fillStyle='#aaff44';
+    ctx.beginPath();ctx.arc(0,PLAYER_H/2+10,12,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+}
+
+function drawEnemyCar(e){
+  ctx.save();
+  ctx.translate(e.x+e.w/2,e.y+e.h/2);
+
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.25)';
+  ctx.beginPath();ctx.ellipse(2,e.h/2+4,e.w/2,5,0,0,Math.PI*2);ctx.fill();
+
+  // Body
+  ctx.fillStyle=e.color;
+  ctx.beginPath();ctx.roundRect(-e.w/2+2,-e.h/2+6,e.w-4,e.h-12,5);ctx.fill();
+
+  // Roof
+  ctx.fillStyle=e.roofColor;
+  ctx.beginPath();ctx.roundRect(-e.w/2+7,-e.h/2+2,e.w-14,e.h*0.42,4);ctx.fill();
+
+  // Windshield (facing down = rear window toward player)
+  ctx.fillStyle='#90e0ef99';
+  ctx.beginPath();ctx.roundRect(-e.w/2+9,-e.h/2+5,e.w-18,10,2);ctx.fill();
+
+  // Wheels
+  [[-e.w/2+1,-e.h/2+12],[e.w/2-9,-e.h/2+12],
+   [-e.w/2+1,e.h/2-22],[e.w/2-9,e.h/2-22]].forEach(([wx,wy])=>{
+    ctx.fillStyle='#111';
+    ctx.beginPath();ctx.roundRect(wx,wy,8,12,3);ctx.fill();
+    ctx.fillStyle='#666';
+    ctx.beginPath();ctx.arc(wx+4,wy+6,2.5,0,Math.PI*2);ctx.fill();
+  });
+
+  // Angry eyes on car grille
+  ctx.fillStyle='#ff4400';
+  ctx.beginPath();ctx.arc(-8,e.h/2-8,4,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(8,e.h/2-8,4,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#000';
+  ctx.beginPath();ctx.arc(-7,e.h/2-8,2,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(9,e.h/2-8,2,0,Math.PI*2);ctx.fill();
+
+  ctx.restore();
+}
+
+function drawFart(f){
+  ctx.save();
+  ctx.globalAlpha=f.alpha;
+  ctx.translate(f.x,f.y);
+  // Green stinky cloud
+  const r=f.radius;
+  ctx.fillStyle='#88ff00';
+  ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#aaff44cc';
+  ctx.beginPath();ctx.arc(-r*0.3,-r*0.4,r*0.6,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(r*0.4,-r*0.3,r*0.5,0,Math.PI*2);ctx.fill();
+  // Stink lines
+  ctx.strokeStyle='#66cc00';ctx.lineWidth=2;
+  [[0,-r-6],[r*0.6,-r-4],[-r*0.5,-r-5]].forEach(([lx,ly])=>{
+    ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(lx,ly-6);ctx.stroke();
+  });
+  // Text
+  ctx.font=`bold ${Math.max(8,r*0.7)}px sans-serif`;
+  ctx.fillStyle='#005500';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('💨',0,0);
+  ctx.restore();
+}
+
+function drawCoin(c){
+  ctx.save();
+  ctx.translate(c.x+10,c.y+10);
+  const bob=Math.sin(frame*0.1+c.phase)*3;
+  ctx.translate(0,bob);
+  // Coin glow
+  ctx.fillStyle='rgba(255,215,0,0.2)';
+  ctx.beginPath();ctx.arc(0,0,14,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#ffd700';
+  ctx.beginPath();ctx.arc(0,0,10,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#ffec6e';
+  ctx.beginPath();ctx.arc(-3,-3,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#b8860b';
+  ctx.font='bold 10px sans-serif';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('₩',0,1);
+  ctx.restore();
+}
+
+function drawObstacle(o){
+  ctx.save();
+  ctx.translate(o.x+o.w/2,o.y+o.h/2);
+  // Traffic cone
+  ctx.fillStyle='#ff6600';
+  ctx.beginPath();
+  ctx.moveTo(0,-o.h/2);
+  ctx.lineTo(o.w/2,o.h/2);
+  ctx.lineTo(-o.w/2,o.h/2);
+  ctx.closePath();ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.fillRect(-o.w/4,-2,o.w/2,5);
+  ctx.fillStyle='#333';
+  ctx.fillRect(-o.w/2,o.h/2-4,o.w,4);
+  ctx.restore();
+}
+
+function drawParticles(){
+  particles.forEach(p=>{
+    ctx.save();ctx.globalAlpha=p.life;
+    ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fill();ctx.restore();
+  });
+}
+
+function drawHUD(){
+  // Level banner
+  ctx.fillStyle='rgba(0,0,0,0.5)';
+  ctx.fillRect(ROAD_L+5,5,120,18);
+  px(`LEVEL ${level}`,ROAD_L+10,7,8,'#44ffcc');
+  // Speed meter
+  const sp=Math.round(scrollSpeed()*30);
+  px(`${sp}km/h`,ROAD_R-75,7,8,'#ff8844');
+}
+
+function drawTitle(){
+  ctx.fillStyle='rgba(0,0,0,0.82)';
+  ctx.fillRect(0,0,W,H);
+
+  // Title plate
+  ctx.fillStyle='#ffcc00';
+  ctx.beginPath();ctx.roundRect(40,80,W-80,120,12);ctx.fill();
+  ctx.fillStyle='#cc8800';
+  ctx.beginPath();ctx.roundRect(44,84,W-88,112,10);ctx.fill();
+
+  px('방구차',W/2,100,28,'#ffff00','center');
+  px('BANGGUCHA',W/2,140,'','#ff8800','center');
+  ctx.font="16px 'Press Start 2P'";
+  ctx.fillStyle='#ff8800';
+  ctx.textAlign='center';
+  ctx.fillText('BANGGUCHA',W/2,142);
+
+  px('RACING',W/2,162,11,'#ffdd00','center');
+
+  // Car deco
+  drawPlayerCar(W/2-60,240,false);
+
+  px('PRESS  ENTER',W/2,320,9,titleBlink<30?'#ffffff':'#888888','center');
+  px('← →  이동',W/2,360,7,'#888','center');
+  px('SPACE  방구발사',W/2,380,7,'#888','center');
+
+  if(hiScore>0) px(`HI-SCORE  ${hiScore}`,W/2,420,7,'#ffcc00','center');
+}
+
+function drawDead(){
+  ctx.fillStyle='rgba(200,0,0,0.35)';
+  ctx.fillRect(0,0,W,H);
+  px('CRASH!!',W/2,H/2-30,20,'#ff0000','center');
+  px(`LIVES: ${'♥'.repeat(lives)}`,W/2,H/2+10,9,'#ff8888','center');
+}
+
+function drawGameOver(){
+  ctx.fillStyle='rgba(0,0,0,0.85)';
+  ctx.fillRect(0,0,W,H);
+  px('GAME OVER',W/2,150,18,'#ff2244','center');
+  px(`SCORE  ${score}`,W/2,200,10,'#ffdd00','center');
+  px(`HI-SCORE  ${hiScore}`,W/2,226,9,'#ffaa00','center');
+  px(`LEVEL  ${level}`,W/2,255,9,'#44ffcc','center');
+  px(titleBlink<30?'PRESS ENTER':'','center',300,8,'#ffffff','center');
+  ctx.font="8px 'Press Start 2P'";
+  ctx.fillStyle=titleBlink<30?'#ffffff':'transparent';
+  ctx.textAlign='center';
+  ctx.fillText('PRESS ENTER',W/2,302);
+}
+
+// ── Spawn helpers ──────────────────────────────────────────────────────
+const ENEMY_COLORS=[
+  {color:'#457b9d',roofColor:'#1d3557'},
+  {color:'#2dc653',roofColor:'#1a7a32'},
+  {color:'#f4a261',roofColor:'#c45e1a'},
+  {color:'#a8dadc',roofColor:'#4a9da0'},
+  {color:'#9b5de5',roofColor:'#6a1fa8'},
+];
+
+function laneX(lane){return ROAD_L+lane*LANE_W+LANE_W/2-20;}
+
+function spawnEnemy(){
+  const lane=Math.floor(Math.random()*3);
+  const ec=ENEMY_COLORS[Math.floor(Math.random()*ENEMY_COLORS.length)];
+  enemies.push({
+    x:laneX(lane), y:-70, w:40, h:58,
+    vy:scrollSpeed()*0.85+Math.random()*1.2,
+    lane, ...ec,
+    hit:false,
+  });
+}
+
+function spawnObstacle(){
+  if(Math.random()<0.4){
+    const lane=Math.floor(Math.random()*3);
+    obstacles.push({x:laneX(lane)+10,y:-40,w:20,h:36,vy:scrollSpeed()*0.7});
+  }
+}
+
+function spawnCoin(){
+  const lane=Math.floor(Math.random()*3);
+  coins.push({x:laneX(lane)+10,y:-30,w:20,h:20,vy:scrollSpeed()*0.9,phase:Math.random()*Math.PI*2});
+}
+
+function addParticles(x,y,color,n=14){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2;
+    const sp=1+Math.random()*5;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,color,r:2+Math.random()*5});
+  }
+}
+
+// ── Collision ─────────────────────────────────────────────────────────
+function rectsOverlap(ax,ay,aw,ah,bx,by,bw,bh){
+  return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;
+}
+
+// ── Update ────────────────────────────────────────────────────────────
+const keys={};
+document.addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(['Space','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
+  if(e.code==='Enter'){
+    if(state==='title'||state==='gameover') initGame();
+  }
+});
+document.addEventListener('keyup',e=>keys[e.code]=false);
+
+// Touch controls
+document.getElementById('btnL').addEventListener('touchstart',e=>{e.preventDefault();keys['ArrowLeft']=true;},{passive:false});
+document.getElementById('btnL').addEventListener('touchend',()=>keys['ArrowLeft']=false);
+document.getElementById('btnR').addEventListener('touchstart',e=>{e.preventDefault();keys['ArrowRight']=true;},{passive:false});
+document.getElementById('btnR').addEventListener('touchend',()=>keys['ArrowRight']=false);
+document.getElementById('btnFart').addEventListener('touchstart',e=>{e.preventDefault();keys['Space']=true;},{passive:false});
+document.getElementById('btnFart').addEventListener('touchend',()=>keys['Space']=false);
+
+function initGame(){
+  score=0;lives=3;level=1;frame=0;
+  player.x=W/2-PLAYER_W/2;player.y=H-90;
+  player.vx=0;player.fartCd=0;player.invincible=0;
+  enemies=[];farts=[];obstacles=[];coins=[];particles=[];
+  enemyTimer=0;enemyInterval=90;obsTimer=0;coinTimer=0;
+  deathTimer=0;
+  document.getElementById('scoreEl').textContent=' '+score;
+  document.getElementById('livesEl').textContent=' '+'♥'.repeat(lives);
+  state='play';
+}
+
+let fartHeld=false;
+
+function update(){
+  frame++;
+  roadY=(roadY+scrollSpeed())%80;
+  titleBlink=(titleBlink+1)%60;
+
+  if(state==='title'||state==='gameover') return;
+
+  if(state==='dead'){
+    deathTimer--;
+    particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life-=0.025;});
+    particles=particles.filter(p=>p.life>0);
+    if(deathTimer<=0){
+      if(lives<=0){hiScore=Math.max(hiScore,score);state='gameover';}
+      else{
+        player.x=W/2-PLAYER_W/2;player.y=H-90;
+        player.vx=0;player.fartCd=0;player.invincible=90;
+        enemies=[];farts=[];obstacles=[];
+        state='play';
+      }
+    }
+    return;
+  }
+
+  // ── Player movement ──
+  if(keys['ArrowLeft']){player.x-=player.speed;if(player.x<ROAD_L+4)player.x=ROAD_L+4;}
+  if(keys['ArrowRight']){player.x+=player.speed;if(player.x+PLAYER_W>ROAD_R-4)player.x=ROAD_R-4-PLAYER_W;}
+  player.vx*=0.85;
+
+  // ── Fart fire ──
+  if(keys['Space']&&!fartHeld&&player.fartCd<=0){
+    farts.push({x:player.x+PLAYER_W/2,y:player.y,vy:-6,radius:14,alpha:1,life:55});
+    player.fartCd=22;
+    fartHeld=true;
+  }
+  if(!keys['Space'])fartHeld=false;
+  if(player.fartCd>0)player.fartCd--;
+  if(player.invincible>0)player.invincible--;
+
+  // ── Fart update ──
+  farts.forEach(f=>{
+    f.y+=f.vy;
+    f.vy*=0.97;
+    f.radius+=0.18;
+    f.life--;
+    f.alpha=f.life/55;
+  });
+  farts=farts.filter(f=>f.life>0&&f.y>-60);
+
+  // ── Enemy spawn ──
+  enemyTimer++;
+  if(enemyTimer>=enemyInterval){spawnEnemy();enemyTimer=0;enemyInterval=Math.max(35,90-level*6);}
+
+  // ── Obstacle spawn ──
+  obsTimer++;
+  if(obsTimer>=120){spawnObstacle();obsTimer=0;}
+
+  // ── Coin spawn ──
+  coinTimer++;
+  if(coinTimer>=80){spawnCoin();coinTimer=0;}
+
+  // ── Update enemies ──
+  enemies.forEach(e=>{
+    e.y+=e.vy+scrollSpeed()*0.15;
+  });
+
+  // ── Fart ↔ Enemy collision ──
+  for(const f of farts){
+    for(const e of enemies){
+      if(e.hit)continue;
+      if(rectsOverlap(f.x-f.radius,f.y-f.radius,f.radius*2,f.radius*2,e.x,e.y,e.w,e.h)){
+        e.hit=true;f.life=0;
+        addParticles(e.x+e.w/2,e.y+e.h/2,'#88ff00',18);
+        addParticles(e.x+e.w/2,e.y+e.h/2,e.color,10);
+        const pts=100*level;
+        score+=pts;
+        document.getElementById('scoreEl').textContent=' '+score;
+        // Pop text
+        particles.push({x:e.x+e.w/2,y:e.y,vx:0,vy:-1.5,life:1.2,color:'#ffdd00',r:0,text:`+${pts}`});
+      }
+    }
+  }
+  enemies=enemies.filter(e=>!e.hit&&e.y<H+80);
+
+  // ── Player ↔ Enemy collision ──
+  if(player.invincible<=0){
+    for(const e of enemies){
+      if(rectsOverlap(player.x+4,player.y+8,PLAYER_W-8,PLAYER_H-10,e.x+4,e.y,e.w-8,e.h-4)){
+        lives--;
+        document.getElementById('livesEl').textContent=' '+'♥'.repeat(Math.max(0,lives));
+        addParticles(player.x+PLAYER_W/2,player.y+PLAYER_H/2,'#ff4444',24);
+        addParticles(player.x+PLAYER_W/2,player.y+PLAYER_H/2,'#ffaa00',16);
+        state='dead';deathTimer=100;
+        enemies=[];
+        return;
+      }
+    }
+  }
+
+  // ── Player ↔ Obstacle collision ──
+  if(player.invincible<=0){
+    for(const o of obstacles){
+      if(rectsOverlap(player.x+6,player.y+10,PLAYER_W-12,PLAYER_H-14,o.x,o.y,o.w,o.h)){
+        lives--;
+        document.getElementById('livesEl').textContent=' '+'♥'.repeat(Math.max(0,lives));
+        addParticles(player.x+PLAYER_W/2,player.y+PLAYER_H/2,'#ff6600',20);
+        state='dead';deathTimer=100;
+        enemies=[];obstacles=[];
+        return;
+      }
+    }
+  }
+
+  // ── Player ↔ Coin ──
+  coins.forEach(co=>{
+    if(!co.collected&&rectsOverlap(player.x,player.y,PLAYER_W,PLAYER_H,co.x,co.y,co.w,co.h)){
+      co.collected=true;
+      score+=50;
+      document.getElementById('scoreEl').textContent=' '+score;
+      addParticles(co.x+10,co.y+10,'#ffd700',8);
+    }
+  });
+
+  // ── Update obstacles & coins ──
+  obstacles.forEach(o=>o.y+=o.vy+scrollSpeed()*0.12);
+  coins.forEach(co=>co.y+=co.vy+scrollSpeed()*0.1);
+  obstacles=obstacles.filter(o=>o.y<H+60);
+  coins=coins.filter(co=>co.y<H+60&&!co.collected);
+
+  // ── Particles ──
+  particles.forEach(p=>{
+    p.x+=p.vx;p.y+=p.vy;p.vy+=0.08;p.life-=0.022;
+  });
+  particles=particles.filter(p=>p.life>0);
+
+  // ── Level up ──
+  if(score>0&&score%(500*level)===0&&frame%10===0){
+    level=Math.min(10,Math.floor(score/500)+1);
+  }
+  if(frame%600===0&&frame>0)level=Math.min(10,level+1);
+}
+
+// ── Score popups (text particles) ────────────────────────────────────
+function drawScorePopups(){
+  particles.forEach(p=>{
+    if(!p.text)return;
+    ctx.save();ctx.globalAlpha=Math.min(1,p.life);
+    ctx.fillStyle=p.color;
+    ctx.font="bold 12px 'Press Start 2P'";
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(p.text,p.x,p.y);
+    ctx.restore();
+  });
+}
+
+// ── Render ─────────────────────────────────────────────────────────────
+function render(){
+  ctx.clearRect(0,0,W,H);
+
+  if(state==='title'){drawRoad();drawTitle();return;}
+  if(state==='gameover'){drawRoad();drawGameOver();return;}
+
+  drawRoad();
+  obstacles.forEach(o=>drawObstacle(o));
+  coins.forEach(co=>drawCoin(co));
+  enemies.forEach(e=>drawEnemyCar(e));
+  farts.forEach(f=>drawFart(f));
+  if(state==='play'||state==='dead'){
+    drawPlayerCar(player.x,player.y,player.invincible>0);
+  }
+  drawParticles();
+  drawScorePopups();
+  drawHUD();
+  if(state==='dead')drawDead();
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────
+function loop(){
+  requestAnimationFrame(loop);
+  update();
+  render();
+}
+loop();
+</script>
+</body>
+</html>
